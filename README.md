@@ -1,29 +1,17 @@
 # JLL package slowdown reproducer
 
-JLL packages seem strangely slow to load.  Using Julia 1.3-rc4, we see:
+JLL packages seem strangely slow to load.  This repo contains two modules that both use a macro in `Pkg.Artifacts` to open a TOML file, parse it, install an artifact if it doesn't already exist, and return the path to it.  We're most interested in the fast path, e.g. the artifact already exists and we should go from zero to dlopen'ed very quickly.  We load two modules so that we can eliminate issues with pieces of `Pkg.Artifacts` itself not being loaded properly, the need to load global TOML files once, etc...  We instrument the modules to both time how long running their contents takes, as well as from the outside to see what the total `using` time is:
 
 ```
-# Run once to precompile
-$ julia-release-1.3 timing_test.jl >/dev/null
-$ julia-release-1.3 timing_test.jl
-[ Info: Foo load time:
-  1.203080 seconds (4.10 M allocations: 207.608 MiB, 2.10% gc time)
-[ Info: Bar load time:
-  0.128752 seconds (130.15 k allocations: 7.637 MiB)
+# Ignore first run because that precompiles the modules themselves
+$ julia-release-1.3 --color=yes timing_test.jl >/dev/null
+$ julia-release-1.3 --color=yes timing_test.jl 
+[ Info: Foo __init__() self-time: 1.090927152
+[ Info: Foo load time: 1.348660712
+[ Info: Bar __init__() self-time: 0.001344999
+[ Info: Bar load time: 0.133114606
 ```
 
-A fair chunk of the initial `Foo` load time is constant start-up costs, (loading TOML files, precompiling Pkg.Artifacts functions, etc...) but much of the time seems to come from outside of the `__init__()` function.  Indeed, instrumenting the `__init__()` function by wrapping it in a giant `@time` block gives the following timings:
-
-```
-$ julia-release-1.3 timing_test.jl 
-[ Info: Foo load time:
-  1.043252 seconds (3.97 M allocations: 198.970 MiB, 2.47% gc time)
-  1.198487 seconds (4.11 M allocations: 208.005 MiB, 2.15% gc time)
-[ Info: Bar load time:
-  0.001274 seconds (2.15 k allocations: 141.266 KiB)
-  0.139161 seconds (128.99 k allocations: 7.585 MiB)
-```
-
-This shows that inference, or `.ji` file loading, or something along those lines is costing us 100x what actually running the `__init__` function should, despite the fact that we have explicitly asked for `__init__()` to be precompiled.
+This shows that inference, or `.ji` file loading, or something along those lines is costing us ~100x what actually running the `__init__` function should, despite the fact that we have explicitly asked for `__init__()` to be precompiled.
 
 As an interesting aside, the `Foo.ji` file that is generated from the `Foo.jl` file here is 270KB large.
